@@ -45,41 +45,36 @@ bool FindValidKernel(uint32_t nBits, CTransaction* stakeCoinsTx, CPosKernel* val
 
     CPosKernel kernel;
     for (const COutput& out : vecOutputs) {
-        if (out.nDepth <= MIN_STAKE_TX_DEPTH)
+        if (out.nDepth <= MIN_STAKE_TX_DEPTH
+                || out.tx->nIndex < 0)
             continue;
+
         const CTransaction& utxo = *out.tx->tx;
         const COutPoint& prevout = utxo.vin[0].prevout;
 
-        CTransactionRef txPrevRef;
-        uint256 txPrevBlockHash;
-        if (!GetTransaction(prevout.hash, txPrevRef, Params().GetConsensus(), txPrevBlockHash, true))
-            return false;
-        const CTransaction& txPrev = *txPrevRef;
-
-        CBlockIndex* blockIndexPrev = mapBlockIndex[txPrevBlockHash];
-
-        int64_t nValueIn = txPrev.vout[prevout.n].nValue;
+        CBlockIndex* blockIndexPrev = mapBlockIndex[out.tx->hashBlock];
+        int64_t nValueIn = utxo.vout[out.tx->nIndex].nValue;
 
         auto current_time = GetAdjustedTime();
-        kernel.nTime = current_time - current_time % STAKE_TIMESTAMP_MASK;
+        kernel.nTime = current_time;
         kernel.nPrevTime = blockIndexPrev->nTime;
         kernel.nPrevoutN = prevout.n;
         kernel.hashPrevout = prevout.hash;
         kernel.bnStakeModifier = ComputeStakeModifier(blockIndexPrev, prevout.hash);
 
-        uint256 kernelHash = kernel.ComputeHash();
+        arith_uint256 kernelHash = UintToArith256(kernel.ComputeHash());
 
         arith_uint256 bnTarget;
         bnTarget.SetCompact(nBits);
         bnTarget *= nValueIn;
+//        auto target = ArithToUint256(bnTarget);
 
-        if (kernelHash < ArithToUint256(bnTarget)) {
+        if (kernelHash < bnTarget) {
             stakeCoinsTx = const_cast<CTransaction*>(&utxo);
             validKernel = const_cast<CPosKernel*>(&kernel);
             return true;
         }
-        printf("FindValidKernel: %s", kernelHash.ToString().c_str());
-        fflush(stdout);
+        printf("FindValidKernel: Invalid hash: %s\n", kernelHash.ToString().c_str());
     }
 
     return false;

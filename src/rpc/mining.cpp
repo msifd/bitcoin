@@ -132,9 +132,12 @@ UniValue generateBlocks(boost::shared_ptr<CReserveScript> coinbaseScript, int nG
             CTransaction* stakeCoinsTx;
             CPosKernel* validKernel;
             // FIXME: correct target (nBits) via func
-            while (nMaxTries > 0 && !FindValidKernel(pblock->nBits, stakeCoinsTx, validKernel)) {
+           uint32_t nBits = pblock->nBits;
+//            uint32_t nBits = GetNextTargetRequired(chainActive.Tip());
+            while (nMaxTries > 0 && !FindValidKernel(nBits, stakeCoinsTx, validKernel)) {
                 --nMaxTries;
-                MilliSleep(STAKE_TIMESTAMP_MASK);
+                fflush(stdout);
+                MilliSleep(1000);
             }
             SignPosBlock(pblock, stakeCoinsTx, validKernel);
         }     
