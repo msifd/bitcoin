@@ -121,10 +121,24 @@ UniValue generateBlocks(boost::shared_ptr<CReserveScript> coinbaseScript, int nG
             LOCK(cs_main);
             IncrementExtraNonce(pblock, chainActive.Tip(), nExtraNonce);
         }
-        while (nMaxTries > 0 && pblock->nNonce < nInnerLoopCount && !CheckProofOfWork(pblock->GetHash(), pblock->nBits, Params().GetConsensus())) {
-            ++pblock->nNonce;
-            --nMaxTries;
+
+        if (nHeight < POS_BLOCKS_HEIGHT) {
+            while (nMaxTries > 0 && pblock->nNonce < nInnerLoopCount && !CheckProofOfWork(pblock->GetHash(), pblock->nBits, Params().GetConsensus())) {
+                ++pblock->nNonce;
+                --nMaxTries;
+            }
         }
+        else {
+            CTransaction* stakeCoinsTx;
+            CPosKernel* validKernel;
+            // FIXME: correct target (nBits) via func
+            while (nMaxTries > 0 && !FindValidKernel(pblock->nBits, stakeCoinsTx, validKernel)) {
+                --nMaxTries;
+                MilliSleep(STAKE_TIMESTAMP_MASK);
+            }
+            SignPosBlock(pblock, stakeCoinsTx, validKernel);
+        }     
+        
         if (nMaxTries == 0) {
             break;
         }

@@ -192,6 +192,8 @@ public:
     //! Verification status of this block. See enum BlockStatus
     unsigned int nStatus;
 
+    uint256 bnStakeModifier; // hash modifier for proof-of-stake
+
     //! block header
     int nVersion;
     uint256 hashMerkleRoot;
@@ -220,6 +222,8 @@ public:
         nStatus = 0;
         nSequenceId = 0;
         nTimeMax = 0;
+
+        bnStakeModifier = uint256();
 
         nVersion       = 0;
         hashMerkleRoot = uint256();
@@ -388,6 +392,7 @@ public:
         READWRITE(nTime);
         READWRITE(nBits);
         READWRITE(nNonce);
+        READWRITE(bnStakeModifier);
     }
 
     uint256 GetBlockHash() const
