@@ -113,33 +113,38 @@ UniValue generateBlocks(boost::shared_ptr<CReserveScript> coinbaseScript, int nG
     UniValue blockHashes(UniValue::VARR);
     while (nHeight < nHeightEnd)
     {
-        std::unique_ptr<CBlockTemplate> pblocktemplate(BlockAssembler(Params()).CreateNewBlock(coinbaseScript->reserveScript));
-        if (!pblocktemplate.get())
-            throw JSONRPCError(RPC_INTERNAL_ERROR, "Couldn't create new block");
-        CBlock *pblock = &pblocktemplate->block;
-        {
-            LOCK(cs_main);
-            IncrementExtraNonce(pblock, chainActive.Tip(), nExtraNonce);
-        }
+        bool makePowBlock = nHeight + 1 < POS_BLOCKS_HEIGHT;
+        std::unique_ptr<CBlockTemplate> pblocktemplate;
+        CBlock *pblock = nullptr;
 
-        if (nHeight < POS_BLOCKS_HEIGHT) {
-            while (nMaxTries > 0 && pblock->nNonce < nInnerLoopCount && !CheckProofOfWork(pblock->GetHash(), pblock->nBits, Params().GetConsensus())) {
+        if (makePowBlock) {
+            pblocktemplate = BlockAssembler(Params()).CreateNewBlock(coinbaseScript->reserveScript);
+            if (!pblocktemplate.get())
+                throw JSONRPCError(RPC_INTERNAL_ERROR, "Couldn't create new block");
+            pblock = &pblocktemplate->block;
+            {
+                LOCK(cs_main);
+                IncrementExtraNonce(pblock, chainActive.Tip(), nExtraNonce);
+            }
+            while (nMaxTries > 0
+                   && pblock->nNonce < nInnerLoopCount
+                   && !CheckProofOfWork(pblock->GetHash(), pblock->nBits, Params().GetConsensus())) {
                 ++pblock->nNonce;
                 --nMaxTries;
             }
         }
         else {
-            CTransaction* stakeCoinsTx;
-            CPosKernel* validKernel;
-            // FIXME: correct target (nBits) via func
-           uint32_t nBits = pblock->nBits;
-//            uint32_t nBits = GetNextTargetRequired(chainActive.Tip());
-            while (nMaxTries > 0 && !FindValidKernel(nBits, stakeCoinsTx, validKernel)) {
+            while (nMaxTries > 0) {
+                if (auto opt = FindValidKernel(GetNextPosTargetRequired(chainActive.Tip()))) {
+                    pblocktemplate = BlockAssembler(Params()).CreateNewPosBlock(coinbaseScript->reserveScript, std::get<0>(*opt), std::get<1>(*opt));
+                    if (!pblocktemplate.get())
+                        throw JSONRPCError(RPC_INTERNAL_ERROR, "Couldn't create new block");
+                    pblock = &pblocktemplate->block;
+                    break;
+                }
                 --nMaxTries;
-                fflush(stdout);
                 MilliSleep(1000);
             }
-            SignPosBlock(pblock, stakeCoinsTx, validKernel);
         }     
         
         if (nMaxTries == 0) {

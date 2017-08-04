@@ -505,8 +505,8 @@ bool CheckTransaction(const CTransaction& tx, CValidationState &state, bool fChe
     CAmount nValueOut = 0;
     for (const auto& txout : tx.vout)
     {
-        if (txout.nValue < 0)
-            return state.DoS(100, false, REJECT_INVALID, "bad-txns-vout-negative");
+//        if (txout.nValue < 0)
+//            return state.DoS(100, false, REJECT_INVALID, "bad-txns-vout-negative");
         if (txout.nValue > MAX_MONEY)
             return state.DoS(100, false, REJECT_INVALID, "bad-txns-vout-toolarge");
         nValueOut += txout.nValue;
@@ -1324,7 +1324,7 @@ void static InvalidBlockFound(CBlockIndex *pindex, const CValidationState &state
 void UpdateCoins(const CTransaction& tx, CCoinsViewCache& inputs, CTxUndo &txundo, int nHeight)
 {
     // mark inputs spent
-    if (!tx.IsCoinBase()) {
+    if (!tx.IsCoinBase() && !tx.IsCoinStake()) {
         txundo.vprevout.reserve(tx.vin.size());
         BOOST_FOREACH(const CTxIn &txin, tx.vin) {
             CCoinsModifier coins = inputs.ModifyCoins(txin.prevout.hash);
@@ -1417,7 +1417,7 @@ bool CheckTxInputs(const CTransaction& tx, CValidationState& state, const CCoins
 
 bool CheckInputs(const CTransaction& tx, CValidationState &state, const CCoinsViewCache &inputs, bool fScriptChecks, unsigned int flags, bool cacheStore, PrecomputedTransactionData& txdata, std::vector<CScriptCheck> *pvChecks)
 {
-    if (!tx.IsCoinBase())
+    if (!tx.IsCoinBase() && !tx.IsCoinStake())
     {
         if (!Consensus::CheckTxInputs(tx, state, inputs, GetSpendHeight(inputs)))
             return false;
@@ -1875,7 +1875,7 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
 
         nInputs += tx.vin.size();
 
-        if (!tx.IsCoinBase())
+        if (!tx.IsCoinBase() && !tx.IsCoinStake())
         {
             if (!view.HaveInputs(tx))
                 return state.DoS(100, error("ConnectBlock(): inputs missing/spent"),
@@ -1905,7 +1905,7 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
                              REJECT_INVALID, "bad-blk-sigops");
 
         txdata.emplace_back(tx);
-        if (!tx.IsCoinBase())
+        if (!tx.IsCoinBase() && !tx.IsCoinStake())
         {
             nFees += view.GetValueIn(tx)-tx.GetValueOut();
 
@@ -2200,7 +2200,7 @@ bool static DisconnectTip(CValidationState& state, const CChainParams& chainpara
             const CTransaction& tx = *it;
             // ignore validation errors in resurrected transactions
             CValidationState stateDummy;
-            if (tx.IsCoinBase() || !AcceptToMemoryPool(mempool, stateDummy, it, false, NULL, NULL, true)) {
+            if (tx.IsCoinBase() || tx.IsCoinStake() || !AcceptToMemoryPool(mempool, stateDummy, it, false, NULL, NULL, true)) {
                 mempool.removeRecursive(tx, MemPoolRemovalReason::REORG);
             } else if (mempool.exists(tx.GetHash())) {
                 vHashUpdate.push_back(tx.GetHash());
@@ -2830,8 +2830,8 @@ bool FindUndoPos(CValidationState &state, int nFile, CDiskBlockPos &pos, unsigne
 bool CheckBlockHeader(const CBlockHeader& block, CValidationState& state, const Consensus::Params& consensusParams, bool fCheckPOW)
 {
     // Check proof of work matches claimed amount
-    if (fCheckPOW && !CheckProofOfWork(block.GetHash(), block.nBits, consensusParams))
-        return state.DoS(50, false, REJECT_INVALID, "high-hash", false, "proof of work failed");
+    // if (fCheckPOW && !CheckProofOfWork(block.GetHash(), block.nBits, consensusParams))
+    //     return state.DoS(50, false, REJECT_INVALID, "high-hash", false, "proof of work failed");
 
     return true;
 }
@@ -2978,9 +2978,15 @@ std::vector<unsigned char> GenerateCoinbaseCommitment(CBlock& block, const CBloc
 bool ContextualCheckBlockHeader(const CBlockHeader& block, CValidationState& state, const Consensus::Params& consensusParams, const CBlockIndex* pindexPrev, int64_t nAdjustedTime)
 {
     const int nHeight = pindexPrev == NULL ? 0 : pindexPrev->nHeight + 1;
-    // Check proof of work
-    if (block.nBits != GetNextWorkRequired(pindexPrev, &block, consensusParams))
-        return state.DoS(100, false, REJECT_INVALID, "bad-diffbits", false, "incorrect proof of work");
+    if (nHeight < POS_BLOCKS_HEIGHT) {
+        // Check proof of work
+        if (block.nBits != GetNextWorkRequired(pindexPrev, &block, consensusParams))
+            return state.DoS(100, false, REJECT_INVALID, "bad-diffbits", false, "incorrect proof of work");
+    } else {
+        // Check proof of stake
+        if (block.nBits != GetNextPosTargetRequired(chainActive.Tip()))
+            return state.DoS(100, false, REJECT_INVALID, "bad-diffbits", false, "incorrect proof of stake");
+    }
 
     // Check timestamp against prev
     if (block.GetBlockTime() <= pindexPrev->GetMedianTimePast())
@@ -3238,7 +3244,9 @@ bool ProcessNewBlock(const CChainParams& chainparams, const std::shared_ptr<cons
         CValidationState state;
         // Ensure that CheckBlock() passes before calling AcceptBlock, as
         // belt-and-suspenders.
-        bool ret = CheckBlock(*pblock, state, chainparams.GetConsensus());
+        bool ret = chainActive.Height() + 1 < POS_BLOCKS_HEIGHT
+            ? CheckBlock(*pblock, state, chainparams.GetConsensus())
+            : CheckPosBlock(*pblock);
 
         LOCK(cs_main);
 

@@ -8,6 +8,7 @@
 
 #include "primitives/block.h"
 #include "txmempool.h"
+#include "pos.h"
 
 #include <stdint.h>
 #include <memory>
@@ -166,6 +167,7 @@ public:
     BlockAssembler(const CChainParams& chainparams);
     /** Construct a new block template with coinbase to scriptPubKeyIn */
     std::unique_ptr<CBlockTemplate> CreateNewBlock(const CScript& scriptPubKeyIn, bool fMineWitnessTx=true);
+    std::unique_ptr<CBlockTemplate> CreateNewPosBlock(const CScript& scriptPubKeyIn, const CTransaction& coinsTx, const CPosKernel& kernel);
 
 private:
     // utility functions

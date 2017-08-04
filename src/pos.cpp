@@ -3,6 +3,7 @@
 // #include "primitives/block.h"
 // #include "streams.h"
 
+#include "consensus/merkle.h"
 #include "wallet/wallet.h"
 #include "arith_uint256.h"
 #include "chainparams.h"
@@ -35,7 +36,7 @@ uint256 ComputeStakeModifier(const CBlockIndex* pindexPrev, const uint256& kerne
 }
 
 // TODO: add "return error"s
-bool FindValidKernel(uint32_t nBits, CTransaction* stakeCoinsTx, CPosKernel* validKernel) {
+boost::optional<std::tuple<CTransaction, CPosKernel>> FindValidKernel(uint32_t nBits) {
     assert(pwalletMain != NULL);
 
     // Get wallet's UTXOs
@@ -49,7 +50,8 @@ bool FindValidKernel(uint32_t nBits, CTransaction* stakeCoinsTx, CPosKernel* val
                 || out.tx->nIndex < 0)
             continue;
 
-        const CTransaction& utxo = *out.tx->tx;
+        CTransactionRef utxoRef = out.tx->tx;
+        CTransaction utxo = *utxoRef;
         const COutPoint& prevout = utxo.vin[0].prevout;
 
         CBlockIndex* blockIndexPrev = mapBlockIndex[out.tx->hashBlock];
@@ -67,23 +69,19 @@ bool FindValidKernel(uint32_t nBits, CTransaction* stakeCoinsTx, CPosKernel* val
         arith_uint256 bnTarget;
         bnTarget.SetCompact(nBits);
         bnTarget *= nValueIn;
-//        auto target = ArithToUint256(bnTarget);
 
         if (kernelHash < bnTarget) {
-            stakeCoinsTx = const_cast<CTransaction*>(&utxo);
-            validKernel = const_cast<CPosKernel*>(&kernel);
-            return true;
+            return std::make_tuple(utxo, kernel);
         }
-        printf("FindValidKernel: Invalid hash: %s\n", kernelHash.ToString().c_str());
     }
 
-    return false;
+    return boost::none;
 }
 
 /**
  * Add Stake transaction to the block
  */
-bool SignPosBlock(CBlock* pblock, CTransaction* coinsTx, CPosKernel* kernel) {
+void SignPosBlock(CBlock* pblock, CTransaction coinsTx, CPosKernel kernel) {
     CCoinsView coinsDummy;
     CCoinsViewCache coins(&coinsDummy);
 
@@ -91,9 +89,63 @@ bool SignPosBlock(CBlock* pblock, CTransaction* coinsTx, CPosKernel* kernel) {
     CMutableTransaction stakeTx;
     stakeTx.vin.resize(1);
     stakeTx.vout.resize(2);
-    stakeTx.vin[0] = CTxIn(coinsTx->GetHash(), 0); // FIXME: real nOut
+    stakeTx.vin[0] = CTxIn(coinsTx.GetHash(), 0); // FIXME: real nOut
+    stakeTx.vout[0].nValue = 0;
+    stakeTx.vout[1].nValue = GetBlockSubsidy(chainActive.Height() + 1, Params().GetConsensus());
     stakeTx.vout[1].scriptPubKey = CScript() << OP_RETURN;
 
-    pblock->nTime = kernel->nTime;
+    pblock->nTime = kernel.nTime;
     pblock->vtx.insert(pblock->vtx.begin() + 1, MakeTransactionRef(std::move(stakeTx)));
+    pblock->hashMerkleRoot = BlockMerkleRoot(*pblock);
+}
+
+bool CheckPosBlock(const CBlock& block) {
+    return true;
+}
+
+bool CheckPosBlockHeader(const CBlockIndex& blockIndex) {
+    return true;
+}
+
+// ppcoin: find last block index up to pindex
+const CBlockIndex* GetLastBlockIndex(const CBlockIndex* pindex) {
+    while (pindex && pindex->pprev)
+        pindex = pindex->pprev;
+    return pindex;
+}
+
+static const int64_t nTargetTimespan = 16 * 60;  // 16 mins
+
+uint32_t GetNextPosTargetRequired(const CBlockIndex* pindexLast) {
+//    arith_uint256 bnTargetLimit = bnProofOfStakeLimit;
+    arith_uint256 bnTargetLimit = UintToArith256(Params().GetConsensus().powLimit);
+    bnTargetLimit.SetCompact(pindexLast->nBits);
+
+    if (pindexLast == NULL)
+        return bnTargetLimit.GetCompact(); // genesis block
+
+    const CBlockIndex* pindexPrev = GetLastBlockIndex(pindexLast);
+    if (pindexPrev->pprev == NULL)
+        return bnTargetLimit.GetCompact(); // first block
+    const CBlockIndex* pindexPrevPrev = GetLastBlockIndex(pindexPrev->pprev);
+    if (pindexPrevPrev->pprev == NULL)
+        return bnTargetLimit.GetCompact(); // second block
+
+    int64_t nTargetSpacing = 64;
+    int64_t nActualSpacing = pindexPrev->GetBlockTime() - pindexPrevPrev->GetBlockTime();
+    if (nActualSpacing > nTargetSpacing * 10)
+        nActualSpacing = nTargetSpacing * 10;
+
+    // ppcoin: target change every block
+    // ppcoin: retarget with exponential moving toward target spacing
+    arith_uint256 bnNew;
+    bnNew.SetCompact(pindexPrev->nBits);
+    int64_t nInterval = nTargetTimespan / nTargetSpacing;
+    bnNew *= ((nInterval - 1) * nTargetSpacing + nActualSpacing + nActualSpacing);
+    bnNew /= ((nInterval + 1) * nTargetSpacing);
+
+    if (bnNew <= 0 || bnNew > bnTargetLimit)
+        bnNew = bnTargetLimit;
+
+    return bnNew.GetCompact();
 }

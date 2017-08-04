@@ -213,6 +213,89 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock(const CScript& sc
     return std::move(pblocktemplate);
 }
 
+std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewPosBlock(const CScript& scriptPubKeyIn, const CTransaction& coinsTx, const CPosKernel& kernel) {
+    int64_t nTimeStart = GetTimeMicros();
+
+    resetBlock();
+
+    pblocktemplate.reset(new CBlockTemplate());
+
+    if(!pblocktemplate.get())
+        return nullptr;
+    pblock = &pblocktemplate->block; // pointer for convenience
+
+    // Add dummy coinbase tx as first transaction
+    pblock->vtx.emplace_back();
+    pblocktemplate->vTxFees.push_back(-1); // updated at end
+    pblocktemplate->vTxSigOpsCost.push_back(-1); // updated at end
+
+    LOCK2(cs_main, mempool.cs);
+    CBlockIndex* pindexPrev = chainActive.Tip();
+    nHeight = pindexPrev->nHeight + 1;
+
+    pblock->nVersion = 7;
+    pblock->nTime = kernel.nTime;
+    const int64_t nMedianTimePast = pindexPrev->GetMedianTimePast();
+
+    nLockTimeCutoff = (STANDARD_LOCKTIME_VERIFY_FLAGS & LOCKTIME_MEDIAN_TIME_PAST)
+                       ? nMedianTimePast
+                       : pblock->GetBlockTime();
+
+    addPriorityTxs();
+    int nPackagesSelected = 0;
+    int nDescendantsUpdated = 0;
+    addPackageTxs(nPackagesSelected, nDescendantsUpdated);
+
+    int64_t nTime1 = GetTimeMicros();
+
+    nLastBlockTx = nBlockTx;
+    nLastBlockSize = nBlockSize;
+    nLastBlockWeight = nBlockWeight;
+
+    // Create coinbase transaction.
+    CMutableTransaction coinbaseTx;
+    coinbaseTx.vin.resize(1);
+    coinbaseTx.vout.resize(1);
+    coinbaseTx.vin[0].prevout.SetNull();
+    coinbaseTx.vin[0].scriptSig = CScript() << nHeight << OP_0;
+    coinbaseTx.vout[0].nValue = 0;
+
+    // Create stake transaction
+    CMutableTransaction stakeTx;
+    stakeTx.vin.resize(1);
+    stakeTx.vout.resize(2);
+    stakeTx.vin[0] = CTxIn(coinsTx.GetHash(), 0); // FIXME: real nOut
+    stakeTx.vout[0].nValue = 0;
+    stakeTx.vout[1].nValue = nFees + GetBlockSubsidy(nHeight, chainparams.GetConsensus());
+    stakeTx.vout[1].scriptPubKey = CScript() << OP_RETURN;
+
+    pblock->vtx[0] = MakeTransactionRef(std::move(coinbaseTx));
+    pblock->vtx.push_back(MakeTransactionRef(std::move(stakeTx)));
+    pblocktemplate->vchCoinbaseCommitment = GenerateCoinbaseCommitment(*pblock, pindexPrev, chainparams.GetConsensus());
+    pblocktemplate->vTxFees[0] = -nFees;
+
+    uint64_t nSerializeSize = GetSerializeSize(*pblock, SER_NETWORK, PROTOCOL_VERSION);
+    LogPrintf("CreateNewPosBlock(): total size: %u block weight: %u txs: %u fees: %ld sigops %d\n", nSerializeSize, GetBlockWeight(*pblock), nBlockTx, nFees, nBlockSigOpsCost);
+
+    // Fill in header
+    pblock->hashPrevBlock  = pindexPrev->GetBlockHash();
+    UpdateTime(pblock, chainparams.GetConsensus(), pindexPrev);
+    pblock->nBits          = GetNextPosTargetRequired(chainActive.Tip());
+    pblock->nNonce         = 0;
+    pblock->hashMerkleRoot = BlockMerkleRoot(*pblock);
+    pblocktemplate->vTxSigOpsCost[0] = WITNESS_SCALE_FACTOR * GetLegacySigOpCount(*pblock->vtx[0]);
+
+    CValidationState state;
+    if (!TestBlockValidity(state, chainparams, *pblock, pindexPrev, false, false)) {
+        throw std::runtime_error(strprintf("%s: TestBlockValidity failed: %s", __func__, FormatStateMessage(state)));
+    }
+    int64_t nTime2 = GetTimeMicros();
+
+    LogPrint("bench", "CreateNewPosBlock() packages: %.2fms (%d packages, %d updated descendants), validity: %.2fms (total %.2fms)\n", 0.001 * (nTime1 - nTimeStart), nPackagesSelected, nDescendantsUpdated, 0.001 * (nTime2 - nTime1), 0.001 * (nTime2 - nTimeStart));
+
+    return std::move(pblocktemplate);
+}
+
 bool BlockAssembler::isStillDependent(CTxMemPool::txiter iter)
 {
     BOOST_FOREACH(CTxMemPool::txiter parent, mempool.GetMemPoolParents(iter))
