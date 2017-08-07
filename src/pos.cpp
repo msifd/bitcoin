@@ -4,7 +4,6 @@
 // #include "streams.h"
 
 #include "consensus/merkle.h"
-#include "wallet/wallet.h"
 #include "arith_uint256.h"
 #include "chainparams.h"
 #include "validation.h"
@@ -36,7 +35,7 @@ uint256 ComputeStakeModifier(const CBlockIndex* pindexPrev, const uint256& kerne
 }
 
 // TODO: add "return error"s
-boost::optional<std::tuple<CTransaction, CPosKernel>> FindValidKernel(uint32_t nBits) {
+boost::optional<std::tuple<COutput, CPosKernel>> FindValidKernel(uint32_t nBits) {
     assert(pwalletMain != NULL);
 
     // Get wallet's UTXOs
@@ -47,7 +46,8 @@ boost::optional<std::tuple<CTransaction, CPosKernel>> FindValidKernel(uint32_t n
     CPosKernel kernel;
     for (const COutput& out : vecOutputs) {
         if (out.nDepth <= MIN_STAKE_TX_DEPTH
-                || out.tx->nIndex < 0)
+                || out.tx->nIndex < 0
+                || !out.tx->IsTrusted())
             continue;
 
         CTransactionRef utxoRef = out.tx->tx;
@@ -71,32 +71,16 @@ boost::optional<std::tuple<CTransaction, CPosKernel>> FindValidKernel(uint32_t n
         bnTarget *= nValueIn;
 
         if (kernelHash < bnTarget) {
-            return std::make_tuple(utxo, kernel);
+            return std::make_tuple(out, kernel);
         }
     }
 
     return boost::none;
 }
 
-/**
- * Add Stake transaction to the block
- */
 void SignPosBlock(CBlock* pblock, CTransaction coinsTx, CPosKernel kernel) {
     CCoinsView coinsDummy;
     CCoinsViewCache coins(&coinsDummy);
-
-    // Create stake transaction
-    CMutableTransaction stakeTx;
-    stakeTx.vin.resize(1);
-    stakeTx.vout.resize(2);
-    stakeTx.vin[0] = CTxIn(coinsTx.GetHash(), 0); // FIXME: real nOut
-    stakeTx.vout[0].nValue = 0;
-    stakeTx.vout[1].nValue = GetBlockSubsidy(chainActive.Height() + 1, Params().GetConsensus());
-    stakeTx.vout[1].scriptPubKey = CScript() << OP_RETURN;
-
-    pblock->nTime = kernel.nTime;
-    pblock->vtx.insert(pblock->vtx.begin() + 1, MakeTransactionRef(std::move(stakeTx)));
-    pblock->hashMerkleRoot = BlockMerkleRoot(*pblock);
 }
 
 bool CheckPosBlock(const CBlock& block) {

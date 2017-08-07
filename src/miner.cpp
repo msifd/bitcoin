@@ -24,6 +24,8 @@
 #include "util.h"
 #include "utilmoneystr.h"
 #include "validationinterface.h"
+#include "wallet/wallet.h"
+#include "script/sign.h"
 
 #include <algorithm>
 #include <boost/thread.hpp>
@@ -213,7 +215,7 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock(const CScript& sc
     return std::move(pblocktemplate);
 }
 
-std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewPosBlock(const CScript& scriptPubKeyIn, const CTransaction& coinsTx, const CPosKernel& kernel) {
+std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewPosBlock(const CScript& scriptPubKeyIn, const COutput& coinsOut, const CPosKernel& kernel) {
     int64_t nTimeStart = GetTimeMicros();
 
     resetBlock();
@@ -264,10 +266,12 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewPosBlock(const CScript&
     CMutableTransaction stakeTx;
     stakeTx.vin.resize(1);
     stakeTx.vout.resize(2);
-    stakeTx.vin[0] = CTxIn(coinsTx.GetHash(), 0); // FIXME: real nOut
+    stakeTx.vin[0] = CTxIn(coinsOut.tx->GetHash(), coinsOut.i);
     stakeTx.vout[0].nValue = 0;
     stakeTx.vout[1].nValue = nFees + GetBlockSubsidy(nHeight, chainparams.GetConsensus());
-    stakeTx.vout[1].scriptPubKey = CScript() << OP_RETURN;
+    stakeTx.vout[1].scriptPubKey = scriptPubKeyIn;
+
+    SignSignature(*pwalletMain, *coinsOut.tx, stakeTx, 0, SIGHASH_ALL);
 
     pblock->vtx[0] = MakeTransactionRef(std::move(coinbaseTx));
     pblock->vtx.push_back(MakeTransactionRef(std::move(stakeTx)));

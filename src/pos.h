@@ -4,6 +4,7 @@
 #include "chain.h"
 #include "arith_uint256.h"
 #include "primitives/transaction.h"
+#include "wallet/wallet.h"
 
 #include <tuple>
 #include <boost/optional.hpp>
@@ -24,7 +25,7 @@ struct CPosKernel {
     uint256 ComputeHash();
 };
 
-boost::optional<std::tuple<CTransaction, CPosKernel>> FindValidKernel(uint32_t nBits);
+boost::optional<std::tuple<COutput, CPosKernel>> FindValidKernel(uint32_t nBits);
 
 void SignPosBlock(CBlock* pblock, CTransaction coinsTx, CPosKernel kernel);
 
